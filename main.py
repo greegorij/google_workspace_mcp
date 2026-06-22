@@ -856,9 +856,13 @@ def main():
             )
 
         if args.transport == "streamable-http":
-            # Check port availability before starting HTTP server
+            # Check port availability before starting HTTP server.
+            # SO_REUSEADDR so a port left in TIME_WAIT by a just-restarted instance
+            # does not fail this probe (uvicorn binds with SO_REUSEADDR as well);
+            # a genuinely active LISTEN socket on the port still raises and aborts.
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     s.bind((host, port))
             except OSError as e:
                 safe_print(f"Socket error: {e}")
