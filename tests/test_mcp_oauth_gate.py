@@ -30,7 +30,11 @@ ALLOWED_REDIRECT = "https://claude.ai/api/mcp/auth_callback"
 
 def _pkce():
     v = secrets.token_urlsafe(64)
-    c = base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest()).rstrip(b"=").decode()
+    c = (
+        base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
     return v, c
 
 
