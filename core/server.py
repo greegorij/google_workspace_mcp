@@ -297,6 +297,15 @@ def configure_server_for_http():
     if transport_mode != "streamable-http":
         return
 
+    # Brama tożsamości Google (s1286) — wspólny mechanizm logowania dla wszystkich MCP.
+    # Niezależna od natywnego OAuth21 FastMCP: tylko trasy Starlette (/oauth/*, /.well-known/*),
+    # montuje się ZAWSZE w HTTP. /oauth/authorize deleguje do logowania Google i wydaje
+    # GOOGLE_MCP_BEARER_TOKEN (ten sam, którego pilnuje Caddy) tylko zweryfikowanemu e-mailowi
+    # z allowlisty. FAIL-CLOSED bez konfiguracji bramy (GOOGLE_MCP_GATE_*).
+    from auth.mcp_oauth_gate import register_gate_routes
+
+    register_gate_routes(server)
+
     # Use centralized OAuth configuration
     from auth.oauth_config import get_oauth_config
 

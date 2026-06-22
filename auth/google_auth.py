@@ -538,6 +538,16 @@ async def start_auth_flow(
         auth_kwargs = {"access_type": "offline", "prompt": prompt_type}
         if initial_email_provided:
             auth_kwargs["login_hint"] = user_google_email
+        # include_granted_scopes="true" makes Google issue an *incremental* access
+        # token covering the UNION of every scope previously granted to this client,
+        # not just the scopes consented in this round. Without it, re-consenting for a
+        # new scope (e.g. adding Calendar to an account that already authorized Gmail)
+        # returns a token scoped ONLY to the new scope. The post-exchange userinfo call
+        # in handle_auth_callback then fails with 401 (the narrow token lacks
+        # openid/userinfo.email) -> "Failed to get user email for identification" -> the
+        # callback returns HTTP 500, and the browser retry hits the already-consumed
+        # state, surfacing the misleading "Invalid or expired OAuth state parameter".
+        auth_kwargs["include_granted_scopes"] = "true"
         auth_url, _ = flow.authorization_url(**auth_kwargs)
 
         browser_opened = False

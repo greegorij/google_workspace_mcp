@@ -2153,6 +2153,59 @@ async def send_gmail_message(
 
 
 @server.tool(
+    title="Send Gmail Draft",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
+@handle_http_errors("send_gmail_draft", service_type="gmail")
+@require_google_service("gmail", GMAIL_SEND_SCOPE)
+async def send_gmail_draft(
+    service,
+    user_google_email: str,
+    draft_id: Annotated[
+        str,
+        Field(
+            description="The ID of the draft to send (as returned by draft_gmail_message, e.g. 'r-1234567890').",
+        ),
+    ],
+) -> str:
+    """
+    Sends an existing Gmail draft by its draft ID.
+
+    Use this after draft_gmail_message to deliver a previously created draft — e.g. when
+    you want the draft's Gmail signature (include_signature) attached, then send it without
+    re-composing the body. The draft is removed from Drafts and delivered.
+
+    Args:
+        draft_id (str): The ID of the draft to send (from draft_gmail_message).
+        user_google_email (str): The user's Google email address. Required for authentication.
+
+    Returns:
+        str: Confirmation message with the sent email's message ID.
+
+    Examples:
+        # Create a draft (with signature) then send it
+        # 1) draft_gmail_message(to="user@example.com", subject="Hi", body="<p>Hello</p>", body_format="html")
+        #    -> Draft ID: r-123...
+        # 2) send_gmail_draft(draft_id="r-123...")
+    """
+    logger.info(
+        f"[send_gmail_draft] Invoked. Email: '{user_google_email}', Draft ID: '{draft_id}'"
+    )
+
+    sent_message = await asyncio.to_thread(
+        service.users().drafts().send(userId="me", body={"id": draft_id}).execute
+    )
+    message_id = sent_message.get("id")
+
+    return f"Draft sent! Message ID: {message_id}"
+
+
+@server.tool(
     title="Draft Gmail Message",
     annotations=ToolAnnotations(
         readOnlyHint=False,
