@@ -17,6 +17,7 @@ dist/
 .env.*
 !.env.example
 !.env.sample
+!.env.oauth21.example
 .venv/
 venv/
 .idea/

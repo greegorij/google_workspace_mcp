@@ -705,7 +705,7 @@ export GOOGLE_CLIENT_SECRET_PATH=\
 
 **⚡ .env File**
 ```bash
-cp .env.oauth21 .env
+cp .env.oauth21.example .env
 # Edit .env with credentials
 ```
 <sub>Best for development</sub>
@@ -1071,6 +1071,16 @@ uv run pytest
 - `uv sync --group test` installs only the testing stack if you need a slimmer environment.
 - `MCP_ENABLE_OAUTH21=true GOOGLE_OAUTH_CLIENT_ID=... uv run main.py --transport streamable-http` launches the HTTP server with your checked-out code for manual verification.
 - Ruff is part of the `dev` group because pre-push hooks call `ruff check` automatically—run it locally before committing to avoid hook failures.
+
+#### Pull-request checks and repository hygiene
+
+Every pull request runs four read-only checks on GitHub-hosted `ubuntu-24.04`: `Test`, `Ruff`, `Docker Validate`, and `Secret Scan`. A push to `main` runs only a full-history `Secret Scan`; tests, lint, and Docker validation are not repeated after merge. The workflow has read-only repository permission and does not publish images, Python packages, MCP Registry entries, releases, cache, or artifacts.
+
+When a pull request is updated, its older in-progress CI run is cancelled to avoid paying twice for stale checks. The `main` history scan is never cancelled by this rule.
+
+The secret scan uses TruffleHog 3.97.1 pinned by image digest with every detector enabled. Pull-request diffs have no baseline: every finding or scanner error fails. The `main` history scan accepts only an exact, reviewed post-revocation baseline for existing historical synthetic examples, placeholders, one revoked GitHub credential, and one expired registry token. Any additional or missing result stops the job and requires review; contributors must not expand the baseline to make a pull request green.
+
+For the full local procedure and the 45-minute technical ceiling of the pull-request-and-merge graph, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 </details>
 
