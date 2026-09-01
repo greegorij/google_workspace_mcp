@@ -1,31 +1,19 @@
-## Description
-Brief description of the changes in this PR.
+## Summary
 
-## Type of Change
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
+Describe the problem and the smallest change that solves it.
 
-## Testing
-- [ ] I have added tests that prove my fix is effective or that my feature works
-- [ ] New and existing unit tests pass locally with my changes
-- [ ] I have tested this change manually
+## Verification
 
-## Checklist
-- [ ] My code follows the style guidelines of this project
-- [ ] I have performed a self-review of my own code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] My changes generate no new warnings
-- [ ] **I have enabled "Allow edits from maintainers" for this pull request**
+- [ ] `uv run pytest -m "not integration"`
+- [ ] `uv run ruff check .`
+- [ ] `uv run ruff format --check .`
+- [ ] Docker Compose and the amd64 image were validated when relevant
+- [ ] Documentation and examples reflect the final behavior
+- [ ] No credentials, local environment files, caches, or build artifacts are included
+- [ ] For a fork pull request, **Allow edits from maintainers** is enabled
 
-## Additional Notes
-Add any other context about the pull request here.
+## Operational impact
 
----
-
-**⚠️ IMPORTANT:** This repository requires that you enable "Allow edits from maintainers" when creating your pull request. This allows maintainers to make small fixes and improvements directly to your branch, speeding up the review process.
-
-To enable this setting:
-1. When creating the PR, check the "Allow edits from maintainers" checkbox
-2. If you've already created the PR, you can enable this in the PR sidebar under "Allow edits from maintainers"
+- GitHub Actions runs/jobs and timeout impact:
+- Cache, artifact, registry, package, release, or deployment impact:
+- Follow-up work or known limitations:

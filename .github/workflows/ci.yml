@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require maintainer edits for fork pull requests
+        if: >-
+          github.event.pull_request.head.repo.fork == true &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          MAINTAINER_CAN_MODIFY: ${{ github.event.pull_request.maintainer_can_modify }}
+        run: test "$MAINTAINER_CAN_MODIFY" = "true"
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+      - name: Install test dependencies
+        run: uv sync --frozen --extra test
+      - name: Run tests without external integrations
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ""
+          GOOGLE_OAUTH_CLIENT_SECRET: ""
+          GOOGLE_APPLICATION_CREDENTIALS: ""
+          FASTMCP_SERVER_AUTH_GOOGLE_JWT_SIGNING_KEY: ""
+        run: uv run pytest -m "not integration"
+
+  ruff:
+    name: Ruff
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+      - name: Install lint dependencies
+        run: uv sync --frozen --group dev
+      - name: Check lint and formatting
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+  docker-validate:
+    name: Docker Validate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Compose and amd64 image
+        run: |
+          trap 'rm -f .env client_secret.json' EXIT
+          cp .env.oauth21.example .env
+          printf '%s\n' '{"installed":{"client_id":"ci-placeholder.apps.googleusercontent.com","client_secret":"ci-placeholder","redirect_uris":["http://localhost"]}}' > client_secret.json
+          docker compose config --quiet
+          docker build --platform linux/amd64 --tag workspace-mcp:ci .
+      - name: Check synthetic container health without network
+        run: |
+          container="$(docker run --detach --platform linux/amd64 --network none \
+            --env MCP_ENABLE_OAUTH21=true \
+            --env GOOGLE_OAUTH_CLIENT_ID=ci-placeholder.apps.googleusercontent.com \
+            --env FASTMCP_SERVER_AUTH_GOOGLE_JWT_SIGNING_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+            workspace-mcp:ci \
+            '/app/.venv/bin/python main.py --transport streamable-http')"
+          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            [ "$status" = healthy ] && exit 0
+            [ "$status" = unhealthy ] && docker logs "$container" && exit 1
+            sleep 2
+          done
+          docker logs "$container"
+          exit 1
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan and enforce policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SCAN_MODE: ${{ github.event_name == 'pull_request' && 'diff' || 'history' }}
+        run: |
+          set -uo pipefail
+          output="$RUNNER_TEMP/trufflehog.jsonl"
+          scanner_exit=0
+          image="ghcr.io/trufflesecurity/trufflehog:3.97.1@sha256:deb2af10659a488a14d262a323addcde099d99827a1cf1dc4e93c17915c39f08"
+          common=(--json --no-update --fail --results=verified,unknown,unverified,filtered_unverified)
+          if [ "$SCAN_MODE" = diff ]; then
+            docker run --rm --network none --volume "$GITHUB_WORKSPACE:/repo:ro" "$image" \
+              git file:///repo --since-commit "$BASE_SHA" --branch "$HEAD_SHA" "${common[@]}" \
+              >"$output" || scanner_exit=$?
+          else
+            docker run --rm --network none --volume "$GITHUB_WORKSPACE:/repo:ro" "$image" \
+              git file:///repo "${common[@]}" >"$output" || scanner_exit=$?
+          fi
+          python .github/scripts/secret_gate.py \
+            --mode "$SCAN_MODE" --input "$output" --scanner-exit "$scanner_exit"
