@@ -21,7 +21,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Require maintainer edits for fork pull requests
-        if: github.event.pull_request.head.repo.fork == true
+        if: >-
+          github.event.pull_request.head.repo.fork == true &&
+          github.event.pull_request.head.repo.full_name != github.repository
         env:
           MAINTAINER_CAN_MODIFY: ${{ github.event.pull_request.maintainer_can_modify }}
         run: test "$MAINTAINER_CAN_MODIFY" = "true"
@@ -34,7 +36,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: false
       - name: Install test dependencies
@@ -62,7 +64,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: false
       - name: Install lint dependencies

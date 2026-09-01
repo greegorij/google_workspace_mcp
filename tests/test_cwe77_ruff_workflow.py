@@ -61,11 +61,30 @@ def test_fork_pull_requests_require_maintainer_edits_without_api_access() -> Non
         for step in steps
         if step.get("name") == "Require maintainer edits for fork pull requests"
     )
-    assert "head.repo.fork == true" in str(gate.get("if", ""))
+    condition = str(gate.get("if", ""))
+    assert "head.repo.fork == true" in condition
+    assert "head.repo.full_name != github.repository" in condition
     assert gate.get("env", {}).get("MAINTAINER_CAN_MODIFY")
     assert 'test "$MAINTAINER_CAN_MODIFY" = "true"' in str(gate.get("run", ""))
     assert "actions/github-script" not in raw
     assert "createComment" not in raw
+
+
+def test_maintainer_edit_gate_distinguishes_own_branch_from_external_fork() -> None:
+    def gate_applies(*, head_is_fork: bool, head_repo: str, repository: str) -> bool:
+        return head_is_fork and head_repo != repository
+
+    repository = "owner/google_workspace_mcp"
+    assert not gate_applies(
+        head_is_fork=True,
+        head_repo=repository,
+        repository=repository,
+    )
+    assert gate_applies(
+        head_is_fork=True,
+        head_repo="contributor/google_workspace_mcp",
+        repository=repository,
+    )
 
 
 def test_pull_request_and_main_jobs_match_the_cost_contract() -> None:
@@ -108,6 +127,22 @@ def test_actions_are_sha_pinned_and_runners_are_standard_linux() -> None:
             uses = step.get("uses")
             if uses:
                 assert SHA_PIN.fullmatch(str(uses)), uses
+
+
+def test_setup_uv_uses_reviewed_node24_release() -> None:
+    workflow, raw = load_workflow(WORKFLOW_PATH)
+    setup_uv = [
+        str(step["uses"])
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
+    ]
+    assert setup_uv == [
+        "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+        "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+    ]
+    assert raw.count("# v10.0.1") == 2
+    assert "d0cc045d04ccac9d8b7881df0226f9e82c39688e" not in raw
 
 
 def test_main_path_has_only_secret_scan_and_no_publish_or_cache() -> None:
