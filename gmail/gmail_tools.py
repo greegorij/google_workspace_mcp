@@ -2656,9 +2656,7 @@ async def list_gmail_drafts(
             payload, ["Subject", "To", "Cc", "Bcc", "Date", "From"]
         )
         att_names = attachment_filenames_from_payload(payload)
-        att_info = (
-            f"{len(att_names)} [{', '.join(att_names)}]" if att_names else "0"
-        )
+        att_info = f"{len(att_names)} [{', '.join(att_names)}]" if att_names else "0"
         lines.append(
             f"- draft_id={draft_id} message_id={message.get('id', '')} "
             f"thread_id={message.get('threadId', '')}\n"
@@ -2723,7 +2721,9 @@ async def update_gmail_draft(
     ] = None,
     keep_existing_attachments: Annotated[
         bool,
-        Field(description="Keep existing draft attachments unless removed. Default True."),
+        Field(
+            description="Keep existing draft attachments unless removed. Default True."
+        ),
     ] = True,
     remove_attachments: Annotated[
         Optional[List[str]],
@@ -2742,10 +2742,7 @@ async def update_gmail_draft(
         f"[update_gmail_draft] Email='{user_google_email}' draft_id='{draft_id}'"
     )
     existing = await asyncio.to_thread(
-        service.users()
-        .drafts()
-        .get(userId="me", id=draft_id, format="raw")
-        .execute
+        service.users().drafts().get(userId="me", id=draft_id, format="raw").execute
     )
     message = existing.get("message") or {}
     raw = message.get("raw")
@@ -2770,7 +2767,9 @@ async def update_gmail_draft(
         # "Name <email@x>"
         try:
             from_name = from_header.split("<", 1)[0].strip().strip('"') or None
-            from_email = from_header.split("<", 1)[1].rstrip(">").strip() or user_google_email
+            from_email = (
+                from_header.split("<", 1)[1].rstrip(">").strip() or user_google_email
+            )
         except Exception:
             from_email = user_google_email
 
@@ -2816,8 +2815,7 @@ async def update_gmail_draft(
     )
     if attachments and attached_count == 0 and attachment_errors:
         raise UserInputError(
-            "No valid new attachments were added. "
-            + "; ".join(attachment_errors)
+            "No valid new attachments were added. " + "; ".join(attachment_errors)
         )
 
     update_body = {"id": draft_id, "message": {"raw": raw_message}}
@@ -2871,10 +2869,7 @@ async def delete_gmail_draft(
     await asyncio.to_thread(
         service.users().drafts().delete(userId="me", id=draft_id).execute
     )
-    return (
-        f"Draft permanently deleted: {draft_id}. "
-        "This action cannot be undone."
-    )
+    return f"Draft permanently deleted: {draft_id}. This action cannot be undone."
 
 
 def _format_thread_content(

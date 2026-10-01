@@ -271,16 +271,12 @@ async def test_drive_file_id_resolves(monkeypatch):
         assert file_id == "drive123"
         return b"%PDF-1.4", "Dokument.pdf", "application/pdf"
 
-    monkeypatch.setattr(
-        "gmail.draft_helpers.download_drive_file_bytes", fake_download
-    )
+    monkeypatch.setattr("gmail.draft_helpers.download_drive_file_bytes", fake_download)
 
     async def fake_auth(*_a, **_k):
         return MagicMock(), "me@example.com"
 
-    monkeypatch.setattr(
-        "auth.google_auth.get_authenticated_google_service", fake_auth
-    )
+    monkeypatch.setattr("auth.google_auth.get_authenticated_google_service", fake_auth)
 
     resolved = await _resolve_url_attachments(
         [{"drive_file_id": "drive123"}],

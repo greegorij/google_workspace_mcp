@@ -143,9 +143,7 @@ async def download_drive_file_bytes(
     import asyncio
 
     meta = await asyncio.to_thread(
-        drive_service.files()
-        .get(fileId=file_id, fields="id,name,mimeType")
-        .execute
+        drive_service.files().get(fileId=file_id, fields="id,name,mimeType").execute
     )
     mime_type = meta.get("mimeType") or "application/octet-stream"
     file_name = meta.get("name") or "attachment"

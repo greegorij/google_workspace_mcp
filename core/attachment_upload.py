@@ -28,7 +28,11 @@ def _expected_bearer() -> str:
 def require_mcp_bearer(request: Request) -> Optional[JSONResponse]:
     """Same bearer as /mcp (GOOGLE_MCP_BEARER_TOKEN). Fail-closed when unset."""
     expected = _expected_bearer()
-    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    auth = (
+        request.headers.get("authorization")
+        or request.headers.get("Authorization")
+        or ""
+    )
     if not expected:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     if not auth.lower().startswith("bearer "):
@@ -104,7 +108,9 @@ async def upload_attachment(request: Request) -> JSONResponse:
         {
             "attachment_id": saved.file_id,
             "path": saved.path,
-            "filename": meta.get("original_filename") or meta.get("filename") or filename,
+            "filename": meta.get("original_filename")
+            or meta.get("filename")
+            or filename,
             "mime_type": meta.get("mime_type") or mime_type,
             "size": len(data),
             "url": get_attachment_url(saved.file_id),
