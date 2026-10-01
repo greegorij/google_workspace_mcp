@@ -696,6 +696,12 @@ async def serve_attachment(request: Request):
     )
 
 
+# GG-1442: multipart upload into managed dir (same bearer as /mcp).
+from core.attachment_upload import register_attachment_upload_route  # noqa: E402
+
+register_attachment_upload_route(server)
+
+
 async def legacy_oauth2_callback(request: Request) -> HTMLResponse:
     state = request.query_params.get("state")
     code = request.query_params.get("code")
