@@ -194,7 +194,8 @@ async def test_draft_gmail_message_surfaces_guidance_for_paths_outside_allowed_d
     message = str(exc_info.value)
     assert "No valid attachments were added" in message
     assert "permitted directories" in message
-    assert "external mounts such as /run/media may be blocked" in message
+    assert "attachment_id" in message
+    assert "drive_file_id" in message
     assert str(blocked_path) in message
 
 

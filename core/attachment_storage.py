@@ -179,6 +179,20 @@ class AttachmentStorage:
 
         return SavedAttachment(file_id=file_id, path=str(file_path))
 
+    def save_attachment_bytes(
+        self,
+        file_bytes: bytes,
+        filename: Optional[str] = None,
+        mime_type: Optional[str] = None,
+    ) -> SavedAttachment:
+        """Save raw attachment bytes (avoids base64 round-trip for HTTP uploads)."""
+        if not isinstance(file_bytes, (bytes, bytearray)):
+            raise TypeError("file_bytes must be bytes")
+        encoded = base64.urlsafe_b64encode(bytes(file_bytes)).decode("ascii")
+        return self.save_attachment(
+            base64_data=encoded, filename=filename, mime_type=mime_type
+        )
+
     def get_attachment_path(self, file_id: str) -> Optional[Path]:
         """
         Get the file path for an attachment ID.

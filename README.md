@@ -799,6 +799,10 @@ cp .env.oauth21.example .env
 | <sub>`manage_gmail_label`</sub> | <sub>Extended</sub> | <sub>Create/update/delete labels</sub> |
 | <sub>`manage_gmail_filter`</sub> | <sub>Extended</sub> | <sub>Create or delete Gmail filters</sub> |
 | <sub>`draft_gmail_message`</sub> | <sub>Extended</sub> | <sub>Create drafts</sub> |
+| <sub>`list_gmail_drafts`</sub> | <sub>Extended</sub> | <sub>List drafts (subject, recipients, attachments)</sub> |
+| <sub>`update_gmail_draft`</sub> | <sub>Extended</sub> | <sub>Update draft body/recipients/attachments</sub> |
+| <sub>`delete_gmail_draft`</sub> | <sub>Extended</sub> | <sub>Permanently delete a draft</sub> |
+| <sub>`send_gmail_draft`</sub> | <sub>Extended</sub> | <sub>Send an existing draft by ID</sub> |
 | <sub>`get_gmail_threads_content_batch`</sub> | <sub>Complete</sub> | <sub>Batch retrieve thread content</sub> |
 | <sub>`batch_modify_gmail_message_labels`</sub> | <sub>Complete</sub> | <sub>Batch modify labels</sub> |
 | <sub>`start_google_auth`</sub> | <sub>Complete</sub> | <sub>Legacy OAuth 2.0 auth (disabled when OAuth 2.1 is enabled)</sub> |
@@ -806,15 +810,15 @@ cp .env.oauth21.example .env
 <details open>
 <summary><b>📎 Email Attachments</b> <sub><sup>← Send emails with files</sup></sub></summary>
 
-Both `send_gmail_message` and `draft_gmail_message` support attachments via two methods:
+Both `send_gmail_message`, `draft_gmail_message`, and `update_gmail_draft` support attachments:
 
-**Option 1: File Path** (local server only)
+**Option 1: File Path** (local server only — must be under the managed attachment directory)
 ```python
 attachments=[{"path": "/path/to/report.pdf"}]
 ```
-Reads file from disk, auto-detects MIME type. Optional `filename` override.
+Reads file from disk, auto-detects MIME type. Optional `filename` override. Paths outside the managed directory fail with a clear hint to use `attachment_id` / `drive_file_id`.
 
-**Option 2: Base64 Content** (works everywhere)
+**Option 2: Base64 Content** (works everywhere; awkward for large PDFs)
 ```python
 attachments=[{
     "filename": "report.pdf",
@@ -823,7 +827,30 @@ attachments=[{
 }]
 ```
 
-**⚠️ Centrally Hosted Servers**: When the MCP server runs remotely (cloud, shared instance), it cannot access your local filesystem. Use **Option 2** with base64-encoded content. Your MCP client must encode files before sending.
+**Option 3: Upload then `attachment_id`** (recommended for remote Mac clients → VPS)
+
+```bash
+curl -X POST "https://google.grzegorzgolas.com/attachments" \
+  -H "Authorization: Bearer $GOOGLE_MCP_BEARER_TOKEN" \
+  -F "file=@./raport.pdf"
+# → {"attachment_id":"…","path":"…","filename":"raport.pdf",…}
+```
+
+```python
+attachments=[{"attachment_id": "<id from upload>"}]
+```
+
+Same bearer as `/mcp`. Max size 25 MB. Files expire with the managed store (default 1 hour).
+
+**Option 4: Google Drive file**
+```python
+attachments=[{"drive_file_id": "<Drive file id>"}]
+```
+Google Docs/Sheets/Slides are exported (Docs/Slides → PDF, Sheets → XLSX) like `get_drive_file_download_url`.
+
+**⚠️ Centrally Hosted Servers**: When the MCP server runs remotely (cloud, shared instance), it cannot access your Mac filesystem paths. Prefer **Option 3** (upload) or **Option 4** (Drive). Avoid stuffing large PDFs as base64 into tool calls.
+
+**`delete_gmail_draft`**: permanently deletes the draft via Gmail `drafts.delete` — this cannot be undone.
 
 </details>
 

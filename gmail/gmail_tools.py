@@ -558,13 +558,9 @@ def _format_attachment_error(
     detail = str(error)
 
     if file_path and isinstance(error, ValueError):
-        if "outside permitted directories" in detail:
-            detail = (
-                "local file access is limited to the server's permitted directories, "
-                f"so '{file_path}' could not be read. Files on external mounts such as "
-                "/run/media may be blocked; move the file into the managed attachment "
-                "directory or another allowed directory, or set ALLOWED_FILE_DIRS."
-            )
+        if "outside permitted directories" in detail or "attachment_id" in detail:
+            # validate_file_path already includes managed-dir + attachment_id hints
+            detail = detail
 
     return f"{label}: {detail}"
 
@@ -940,8 +936,11 @@ def _try_read_local_attachment(url: str) -> Optional[tuple[bytes, str, Optional[
 
 async def _resolve_url_attachments(
     attachments: Optional[List[Dict[str, Any]]],
+    *,
+    user_google_email: Optional[str] = None,
+    tool_name: str = "gmail_attachments",
 ) -> Optional[List[Dict[str, Any]]]:
-    """Pre-resolve any URL-based attachments to raw bytes.
+    """Pre-resolve URL / attachment_id / drive_file_id attachments to raw bytes.
 
     For each attachment dict that carries a ``url`` key:
     * If the URL matches the MCP's own ``/attachments/{id}`` pattern the file
@@ -949,15 +948,98 @@ async def _resolve_url_attachments(
       localhost).
     * Otherwise the URL is fetched via :func:`ssrf_safe_fetch`.
 
-    The resolved entry replaces ``url`` with ``_resolved_bytes`` (raw
+    ``attachment_id`` reads the managed store from POST /attachments.
+    ``drive_file_id`` downloads/exports via Drive (Google Docs → PDF).
+
+    The resolved entry replaces sources with ``_resolved_bytes`` (raw
     ``bytes``) so that :func:`_prepare_gmail_message` can attach it without a
     redundant base64 round-trip.
     """
     if not attachments:
         return attachments
 
+    drive_service = None
+
+    async def _get_drive():
+        nonlocal drive_service
+        if drive_service is not None:
+            return drive_service
+        if not user_google_email:
+            raise UserInputError(
+                "drive_file_id requires an authenticated Google user email"
+            )
+        from auth.google_auth import get_authenticated_google_service
+        from auth.scopes import DRIVE_READONLY_SCOPE
+
+        drive_service, _email = await get_authenticated_google_service(
+            "drive",
+            "v3",
+            tool_name,
+            user_google_email,
+            [DRIVE_READONLY_SCOPE],
+        )
+        return drive_service
+
     resolved: List[Dict[str, Any]] = []
     for att in attachments:
+        if att.get("error"):
+            resolved.append(att)
+            continue
+
+        if att.get("attachment_id"):
+            file_id = str(att["attachment_id"]).strip()
+            try:
+                storage = get_attachment_storage()
+                metadata = storage.get_attachment_metadata(file_id)
+                file_path = storage.get_attachment_path(file_id)
+                if not metadata or not file_path:
+                    raise UserInputError(
+                        f"attachment_id '{file_id}' not found or expired "
+                        f"(upload via POST /attachments into {STORAGE_DIR})"
+                    )
+                data = _read_attachment_bytes(file_path)
+                filename = (
+                    att.get("filename")
+                    or metadata.get("original_filename")
+                    or metadata.get("filename")
+                    or "attachment"
+                )
+                mime_type = att.get("mime_type") or metadata.get("mime_type")
+                entry = {
+                    "_resolved_bytes": data,
+                    "filename": filename,
+                    "mime_type": mime_type or "application/octet-stream",
+                }
+                if "content_id" in att:
+                    entry["content_id"] = att["content_id"]
+                resolved.append(entry)
+            except Exception as exc:
+                logger.exception("Failed to resolve attachment_id %s", file_id)
+                resolved.append(_build_attachment_error_entry(att, exc))
+            continue
+
+        if att.get("drive_file_id"):
+            drive_id = str(att["drive_file_id"]).strip()
+            try:
+                from gmail.draft_helpers import download_drive_file_bytes
+
+                drv = await _get_drive()
+                data, drive_name, drive_mime = await download_drive_file_bytes(
+                    drv, drive_id
+                )
+                entry = {
+                    "_resolved_bytes": data,
+                    "filename": att.get("filename") or drive_name,
+                    "mime_type": att.get("mime_type") or drive_mime,
+                }
+                if "content_id" in att:
+                    entry["content_id"] = att["content_id"]
+                resolved.append(entry)
+            except Exception as exc:
+                logger.exception("Failed to resolve drive_file_id %s", drive_id)
+                resolved.append(_build_attachment_error_entry(att, exc))
+            continue
+
         if "url" not in att:
             resolved.append(att)
             continue
@@ -1017,6 +1099,12 @@ async def _resolve_url_attachments(
         if "content_id" in att:
             entry["content_id"] = att["content_id"]
         resolved.append(entry)
+
+    if drive_service is not None:
+        try:
+            drive_service.close()
+        except Exception:
+            pass
 
     return resolved
 
@@ -2099,11 +2187,20 @@ async def send_gmail_message(
         signature_html = await _get_send_as_signature_html_for_tool(
             service, from_email=sender_email
         )
-        send_body_content = _append_signature_to_body(
-            send_body_content, body_format, signature_html
-        )
+        from gmail.draft_helpers import signature_already_present
 
-    resolved_attachments = await _resolve_url_attachments(attachments)
+        if signature_html and not signature_already_present(
+            send_body_content, body_format, signature_html, _html_to_text
+        ):
+            send_body_content = _append_signature_to_body(
+                send_body_content, body_format, signature_html
+            )
+
+    resolved_attachments = await _resolve_url_attachments(
+        attachments,
+        user_google_email=user_google_email,
+        tool_name="send_gmail_message",
+    )
     raw_message, thread_id_final, attached_count, attachment_errors = (
         _prepare_gmail_message(
             subject=subject,
@@ -2430,9 +2527,25 @@ async def draft_gmail_message(
             },
         )
     else:
-        draft_body = _append_signature_to_body(draft_body, body_format, signature_html)
+        if include_signature and signature_html:
+            from gmail.draft_helpers import signature_already_present
 
-    resolved_attachments = await _resolve_url_attachments(attachments)
+            if not signature_already_present(
+                draft_body, body_format, signature_html, _html_to_text
+            ):
+                draft_body = _append_signature_to_body(
+                    draft_body, body_format, signature_html
+                )
+        elif include_signature:
+            draft_body = _append_signature_to_body(
+                draft_body, body_format, signature_html
+            )
+
+    resolved_attachments = await _resolve_url_attachments(
+        attachments,
+        user_google_email=user_google_email,
+        tool_name="draft_gmail_message",
+    )
     raw_message, thread_id_final, attached_count, attachment_errors = (
         _prepare_gmail_message(
             subject=subject,
@@ -2477,6 +2590,286 @@ async def draft_gmail_message(
         attached_count, requested_attachment_count
     )
     return f"Draft created{attachment_info}! Draft ID: {draft_id}"
+
+
+@server.tool(
+    title="List Gmail Drafts",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+@handle_http_errors("list_gmail_drafts", is_read_only=True, service_type="gmail")
+@require_google_service("gmail", GMAIL_COMPOSE_SCOPE)
+async def list_gmail_drafts(
+    service,
+    user_google_email: str,
+    query: Annotated[
+        Optional[str],
+        Field(
+            description="Optional Gmail search query to filter drafts (same operators as search).",
+        ),
+    ] = None,
+    page_size: Annotated[
+        int,
+        Field(
+            description="Maximum number of drafts to return (1-50). Defaults to 20.",
+            ge=1,
+            le=50,
+        ),
+    ] = 20,
+) -> str:
+    """Lists Gmail drafts with subject, recipients, date, and attachment names.
+
+    Returns draft_id, message_id, thread_id, and attachment filenames for each draft.
+    """
+    from gmail.draft_helpers import attachment_filenames_from_payload
+
+    logger.info(
+        f"[list_gmail_drafts] Email='{user_google_email}' query={query!r} page_size={page_size}"
+    )
+    list_kwargs: Dict[str, Any] = {"userId": "me", "maxResults": page_size}
+    if query:
+        list_kwargs["q"] = query
+
+    listed = await asyncio.to_thread(
+        service.users().drafts().list(**list_kwargs).execute
+    )
+    drafts = listed.get("drafts") or []
+    if not drafts:
+        return "No drafts found."
+
+    lines = [f"Found {len(drafts)} draft(s):"]
+    for stub in drafts:
+        draft_id = stub.get("id", "")
+        detail = await asyncio.to_thread(
+            service.users()
+            .drafts()
+            .get(userId="me", id=draft_id, format="full")
+            .execute
+        )
+        message = detail.get("message") or {}
+        payload = message.get("payload") or {}
+        headers = _extract_headers(
+            payload, ["Subject", "To", "Cc", "Bcc", "Date", "From"]
+        )
+        att_names = attachment_filenames_from_payload(payload)
+        att_info = f"{len(att_names)} [{', '.join(att_names)}]" if att_names else "0"
+        lines.append(
+            f"- draft_id={draft_id} message_id={message.get('id', '')} "
+            f"thread_id={message.get('threadId', '')}\n"
+            f"  Subject: {headers.get('Subject', '(no subject)')}\n"
+            f"  To: {headers.get('To', '')} | Cc: {headers.get('Cc', '')} | "
+            f"Date: {headers.get('Date', '')}\n"
+            f"  Attachments: {att_info}"
+        )
+    return "\n".join(lines)
+
+
+@server.tool(
+    title="Update Gmail Draft",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
+@handle_http_errors("update_gmail_draft", service_type="gmail")
+@require_google_service("gmail", GMAIL_COMPOSE_SCOPE)
+async def update_gmail_draft(
+    service,
+    user_google_email: str,
+    draft_id: Annotated[
+        str, Field(description="Draft ID to update (from draft_gmail_message / list).")
+    ],
+    subject: Annotated[
+        Optional[str], Field(description="New subject; omit to keep existing.")
+    ] = None,
+    body: Annotated[
+        Optional[str], Field(description="New body; omit to keep existing.")
+    ] = None,
+    body_format: Annotated[
+        Optional[Literal["plain", "html"]],
+        Field(description="Body format when body is provided. Defaults to existing."),
+    ] = None,
+    to: Annotated[
+        Optional[str], Field(description="New To; omit to keep existing.")
+    ] = None,
+    cc: Annotated[
+        Optional[str], Field(description="New Cc; omit to keep existing.")
+    ] = None,
+    bcc: Annotated[
+        Optional[str], Field(description="New Bcc; omit to keep existing.")
+    ] = None,
+    include_signature: Annotated[
+        bool,
+        Field(
+            description="When True and body is updated, append Gmail signature if not already present.",
+        ),
+    ] = False,
+    attachments: Annotated[
+        Optional[DictList],
+        Field(
+            description=(
+                "New attachments to add (path / content / url / attachment_id / drive_file_id). "
+                "Combined with keep_existing_attachments / remove_attachments."
+            ),
+        ),
+    ] = None,
+    keep_existing_attachments: Annotated[
+        bool,
+        Field(
+            description="Keep existing draft attachments unless removed. Default True."
+        ),
+    ] = True,
+    remove_attachments: Annotated[
+        Optional[List[str]],
+        Field(description="Filenames of existing attachments to drop."),
+    ] = None,
+) -> str:
+    """Updates an existing Gmail draft via drafts.update.
+
+    Omitted fields keep their previous values. Thread headers (In-Reply-To,
+    References) and threadId are preserved. When include_signature=True, the
+    signature is appended only if it is not already in the body.
+    """
+    from gmail.draft_helpers import parse_raw_mime_message, signature_already_present
+
+    logger.info(
+        f"[update_gmail_draft] Email='{user_google_email}' draft_id='{draft_id}'"
+    )
+    existing = await asyncio.to_thread(
+        service.users().drafts().get(userId="me", id=draft_id, format="raw").execute
+    )
+    message = existing.get("message") or {}
+    raw = message.get("raw")
+    if not raw:
+        raise UserInputError(f"Draft '{draft_id}' has no raw MIME payload")
+    parsed = parse_raw_mime_message(raw)
+    thread_id = message.get("threadId")
+
+    new_subject = parsed["subject"] if subject is None else subject
+    new_to = parsed["to"] if to is None else to
+    new_cc = parsed["cc"] if cc is None else cc
+    new_bcc = parsed["bcc"] if bcc is None else bcc
+    new_format: Literal["plain", "html"] = (
+        body_format if body_format is not None else parsed["body_format"]
+    )
+    new_body = parsed["body"] if body is None else body
+
+    from_header = parsed.get("from") or user_google_email
+    from_email = user_google_email
+    from_name = None
+    if from_header and "<" in from_header and ">" in from_header:
+        # "Name <email@x>"
+        try:
+            from_name = from_header.split("<", 1)[0].strip().strip('"') or None
+            from_email = (
+                from_header.split("<", 1)[1].rstrip(">").strip() or user_google_email
+            )
+        except Exception:
+            from_email = user_google_email
+
+    if include_signature and body is not None:
+        signature_html = await _get_send_as_signature_html_for_tool(
+            service, from_email=from_email
+        )
+        if signature_html and not signature_already_present(
+            new_body, new_format, signature_html, _html_to_text
+        ):
+            new_body = _append_signature_to_body(new_body, new_format, signature_html)
+
+    final_attachments: List[Dict[str, Any]] = []
+    if keep_existing_attachments:
+        remove_set = {n.lower() for n in (remove_attachments or []) if n}
+        for att in parsed.get("attachments") or []:
+            name = (att.get("filename") or "").lower()
+            if name and name in remove_set:
+                continue
+            final_attachments.append(att)
+
+    if attachments:
+        resolved_new = await _resolve_url_attachments(
+            attachments,
+            user_google_email=user_google_email,
+            tool_name="update_gmail_draft",
+        )
+        final_attachments.extend(resolved_new or [])
+
+    raw_message, _tid, attached_count, attachment_errors = _prepare_gmail_message(
+        subject=new_subject or "",
+        body=new_body or "",
+        body_format=new_format,
+        to=new_to,
+        cc=new_cc,
+        bcc=new_bcc,
+        thread_id=thread_id,
+        in_reply_to=parsed.get("in_reply_to"),
+        references=parsed.get("references"),
+        from_email=from_email,
+        from_name=from_name,
+        attachments=final_attachments,
+    )
+    if attachments and attached_count == 0 and attachment_errors:
+        raise UserInputError(
+            "No valid new attachments were added. " + "; ".join(attachment_errors)
+        )
+
+    update_body = {"id": draft_id, "message": {"raw": raw_message}}
+    if thread_id:
+        update_body["message"]["threadId"] = thread_id
+
+    updated = await asyncio.to_thread(
+        service.users()
+        .drafts()
+        .update(userId="me", id=draft_id, body=update_body)
+        .execute,
+        num_retries=GOOGLE_API_WRITE_RETRIES,
+    )
+    out_id = updated.get("id") or draft_id
+    summary_bits = [
+        f"Draft updated! Draft ID: {out_id}",
+        f"subject={new_subject!r}",
+        f"to={new_to!r}",
+        f"attachments={attached_count}",
+    ]
+    if attachment_errors:
+        summary_bits.append("attachment_errors=" + "; ".join(attachment_errors))
+    return " | ".join(summary_bits)
+
+
+@server.tool(
+    title="Delete Gmail Draft",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+@handle_http_errors("delete_gmail_draft", service_type="gmail")
+@require_google_service("gmail", GMAIL_COMPOSE_SCOPE)
+async def delete_gmail_draft(
+    service,
+    user_google_email: str,
+    draft_id: Annotated[
+        str,
+        Field(
+            description="Draft ID to permanently delete. This cannot be undone.",
+        ),
+    ],
+) -> str:
+    """Permanently deletes a Gmail draft (drafts.delete). This cannot be undone."""
+    logger.info(
+        f"[delete_gmail_draft] Email='{user_google_email}' draft_id='{draft_id}'"
+    )
+    await asyncio.to_thread(
+        service.users().drafts().delete(userId="me", id=draft_id).execute
+    )
+    return f"Draft permanently deleted: {draft_id}. This action cannot be undone."
 
 
 def _format_thread_content(

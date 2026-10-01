@@ -237,10 +237,15 @@ def validate_file_path(file_path: str) -> Path:
         except ValueError:
             continue
 
+    managed = next(iter(allowed_dirs), None)
+    managed_hint = f" Managed attachment directory: {managed}." if managed else ""
     raise ValueError(
         f"Access to '{resolved_str}' is not allowed: "
-        f"path is outside permitted directories ({', '.join(str(d) for d in allowed_dirs)}). "
-        "Set ALLOWED_FILE_DIRS to adjust."
+        f"path is outside permitted directories ({', '.join(str(d) for d in allowed_dirs)})."
+        f"{managed_hint} "
+        "For remote clients (Mac → VPS), upload via POST /attachments and pass "
+        "attachments=[{{'attachment_id': '...'}}] or use attachments=[{{'drive_file_id': '...'}}]. "
+        "Local path only works inside the managed directory (or ALLOWED_FILE_DIRS)."
     )
 
 
