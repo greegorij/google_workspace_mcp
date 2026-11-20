@@ -17,3 +17,8 @@ def install_startup_warning_filters() -> None:
         message=r"authlib\.jose module is deprecated.*",
         category=AuthlibDeprecationWarning,
     )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"The httpx module is deprecated.*",
+        category=AuthlibDeprecationWarning,
+    )
